@@ -1,0 +1,119 @@
+---
+output: html_document
+title: Report
+...
+
+### Predicting exercise quality using a random forest built on movement data
+
+#### Or: the unreasonable effectiveness of random forests
+
+#### Summary
+
+We describe a method for predicting the quality of lifting exercises using a
+random forest model built on data coming from accelerometers and magnetometers
+attached to a person's body. The dataset comes from [Ugulino, Cardador, Vega,
+Velloso, Milidiu, and Fuks][1]. It has been broken into training and test sets
+by the Johns Hopkins Data Science Specialization course on Practical Machine
+Learning.
+
+[1]: <http://groupware.les.inf.puc-rio.br/har>
+
+As we will demonstrate, we built our model in a way that violates some basic
+principles of good model-building: - We did not attempt to find an expert or
+make expert judgments about the meaning of the variables for feature selection,
+and we reduced dimensionality using PCA with a threshold of 0.8 - We used a
+black box model -- random forests -- that has no hope of meaningfully
+generalizing outside of the domain of inputs captured by the model.
+
+#### Cleaning the data
+
+We will use the `caret` package for cleaning the data. Our data is split into
+training and test sets, which in our case are stored in the files `training.csv`
+and `test.csv`. We load the `caret` package and the training data, and do some
+cleaning (which is explained below the code).
+
+`{r, cache=TRUE} library(caret) training <- read.csv("training.csv") var.num <-
+dim(training)[[2]] var.names <- names(training) cases <- sapply(1:160, function
+(i) {sum(complete.cases(training[i]))}) big.ones <- training[,cases==19622]
+big.ones <- big.ones[,-c(1:7)] classes <- sapply(big.ones, class) numbers <-
+big.ones[,classes != "factor"] cleaner.data <- data.frame(sapply(numbers,
+as.numeric)) cleaner.data$classe <- big.ones$classe`
+
+The `r var.num` variables come in several groups. For example, the variable
+names "`r var.names[c(1:7)]`" store variables related to the logistics of data
+collection, which will certainly be highly correlated with the outcome but
+cannot be used in a model (!). Moreover, of the `r var.num` variables, only `r
+sum(cases == 19622)` variables are present in all samples (the rest are only
+present in a `r levels(as.factor(cases))[[1]]` samples, which is vanishingly
+small). Of the variables that were recorded in all cases, only `r sum(classes !=
+"factor")` have well-defined numeric values. This leaves us with `r
+dim(numbers)[[2]]` variables.
+
+#### Training the model
+
+We train a random forest with fourfold cross-validation on the training set,
+using PCA with a threshold of 0.8 to reduce the dimensionality of the feature
+space. By default, the forest has 500 trees. Using cross-validation, we can
+estimate the performance of this (lazily selected) model as follows. (I am
+demonstrating the tuning grid that uses 2, 3, and 4 for splits, mostly because
+knitr is having some kind of problem with the full `train` function.)
+
+`{r, cache=TRUE} tC <- trainControl(method="cv", number=2,
+preProcOptions=list(thresh=0.8)) training.results <- train(classe~.,
+data=cleaner.data, preProcess="pca", trControl=tC, tuneGrid=data.frame(mtry=c(2,
+3, 4))) training.results$results`
+
+As we see from the output, the best performance comes from trees that split
+along `r training.results$bestTune$mtry` variables each time. The model is
+predicted to have an accuracy of `r training.results$results[1,2]`, which is
+quite high. Part of the "magic" of the random forest model is that the training
+accuracy accurately reflects the OOB errors due to the randomness inherent in
+the training procedure. The inventors of the random forest make many bold claims
+about the method, including that it is resistant to overfitting, does not need
+cross-validation, and gives accurate estimates of OOB error. This seems to be
+often true in practice, but of course we should take such claims with a grain of
+salt.
+
+We can now train a final model. This is the model that was used on the testing
+data. `{r, cache=TRUE} tCFinal <- trainControl(method="none",
+preProcOptions=list(thresh=0.8)) model <- train(classe~., data=cleaner.data,
+preProcess="pca", trControl=tCFinal, tuneGrid=data.frame(mtry=2))`
+
+#### Testing the model
+
+When testing this model on the provided test set, we achieved 90% accuracy,
+close to that predicted in the training process. (We cannot provide proof of
+that in this document, since we do not have access to ground-truth independent
+of our claims. The testing was remote and automated.)
+
+#### Why did this work so well with so little work?
+
+A decision tree results in a locally constant function whose values have
+boundaries that are parallel to coordinate axes. A random forest generates many
+such locally constant functions and takes the mode of their values at any given
+point.
+
+We know that any reasonable function can be approximated arbitrarily well by
+locally constant functions. (This is the basis for Lebesgue integration!) The
+accurace of the model in this instance really reflects that the "performance
+quality" function is reasonable; more precisely, it seems to be roughly locally
+constant on reasonable domains of the feature space, even after applying PCA.
+
+Why apply PCA? Computation time is reduced with fewer variables. The sad truth
+is that we could have built a random forest on all of the data and found
+similarly good results. Random forests sometimes reduce the fun.
+
+#### Why is this sad? The limitations of random forests.
+
+While random forests do a great job, they have one very serious limitation: they
+are utterly worthless outside of the portion of the domain that has reasonably
+dense samples in the training data. (It is instructive to use a random forest to
+model something like $\sin(x)$ by drawing many random samples. The sample are
+confined to an interval $[a,b]$, and the model is **constant** on each side of
+the interval.)
+
+In the case at hand, if one wishes to use the model constructed above, one can
+only hope that subjects will not move in a way that is radically outside of the
+sample space. In fact, one should almost certainly build a model to first
+determine if the subject is doing anything remotely related to the exercise at
+hand before trying to evaluate its quality.
